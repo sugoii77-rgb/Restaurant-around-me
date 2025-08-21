@@ -87,25 +87,16 @@
     ></script>
 
     <script>
-        // Google Maps API 키를 AIzaSyASe5K_ijvZ6duDsIGWejVX1evTRJZ179Y 부분에 넣어주세요.
-        // Google Cloud Console에서 Places API와 Maps JavaScript API가 활성화되어 있는지 확인하세요.
-
         let map;
         let placesService;
         let userLocation;
         let markers = [];
         let currentCategory = '';
-        let placesLibrary;
         let markerLibrary;
 
-        /**
-         * 지도와 API를 초기화하는 함수.
-         * Google Maps API가 로드되면 자동으로 호출됩니다.
-         */
         async function initMap() {
             try {
                 const { Map } = await google.maps.importLibrary("maps");
-                placesLibrary = await google.maps.importLibrary("places");
                 markerLibrary = await google.maps.importLibrary("marker");
                 
                 const defaultLocation = { lat: 37.5665, lng: 126.9780 }; // 서울 시청
@@ -136,32 +127,23 @@
             }
         }
 
-        /**
-         * 지도 객체를 생성하고 초기화하는 함수.
-         * @param {Object} Map - google.maps.Map 클래스.
-         * @param {Object} center - 지도의 중심 좌표. {lat, lng} 형식.
-         */
         function createMap(Map, center) {
             map = new Map(document.getElementById("map"), {
                 center: center,
                 zoom: 15,
                 disableDefaultUI: true,
-                mapId: 'DEMO_MAP_ID', // Advanced Markers를 사용하려면 Map ID가 필요합니다.
+                mapId: 'DEMO_MAP_ID',
                 zoomControl: true,
             });
 
-            // 사용자 위치에 마커 추가
             new markerLibrary.AdvancedMarkerElement({
                 position: center,
                 map,
                 title: "현재 위치",
             });
+            placesService = new google.maps.places.PlacesService(map);
         }
 
-        /**
-         * 주어진 메시지를 UI에 표시하는 함수.
-         * @param {string} text - 표시할 메시지 텍스트.
-         */
         function setMessage(text) {
             const messageBox = document.getElementById("message-box");
             if (messageBox) {
@@ -169,30 +151,27 @@
             }
         }
 
-        /**
-         * 지도에 있는 모든 마커를 제거하는 함수.
-         */
         function clearMarkers() {
             markers.forEach(marker => marker.map = null);
             markers = [];
         }
 
-        /**
-         * 검색 결과를 지도에 마커로 표시하고 목록을 생성하는 함수.
-         * @param {Array} places - Places API 검색 결과.
-         */
-        function processResults(places) {
+        function processResults(results, status) {
             const resultsList = document.getElementById("results-list");
-            resultsList.innerHTML = ''; // 기존 목록 초기화
+            resultsList.innerHTML = '';
             clearMarkers();
 
-            if (places && places.length > 0) {
-                const top5Results = places.slice(0, 5); // 상위 5개만 사용
+            if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+                const top5Results = results.slice(0, 5);
                 
-                top5Results.forEach((place, index) => {
-                    const placeLocation = place.location;
+                if (top5Results.length === 0) {
+                    resultsList.innerHTML = `<p class="text-center text-gray-500">주변에 ${currentCategory} 맛집을 찾을 수 없습니다.</p>`;
+                    return;
+                }
 
-                    // 목록 항목 생성
+                top5Results.forEach((place, index) => {
+                    const placeLocation = place.geometry.location;
+
                     const listItem = document.createElement("div");
                     listItem.className = "flex items-center gap-4 p-3 hover:bg-gray-100 transition-colors duration-200 rounded-lg cursor-pointer";
                     listItem.innerHTML = `
@@ -200,15 +179,13 @@
                             ${index + 1}
                         </div>
                         <div>
-                            <h3 class="font-semibold text-lg text-gray-900">${place.displayName.text}</h3>
-                            <p class="text-sm text-gray-500">${place.formattedAddress}</p>
+                            <h3 class="font-semibold text-lg text-gray-900">${place.name}</h3>
+                            <p class="text-sm text-gray-500">${place.vicinity || place.formatted_address}</p>
                         </div>
                     `;
 
-                    // 목록 항목 클릭 시 지도 이동 및 마커에 정보창 열기
                     listItem.addEventListener('click', () => {
                         map.panTo(placeLocation);
-                        // TODO: New Infowindow functionality for Advanced Markers
                     });
 
                     resultsList.appendChild(listItem);
@@ -218,24 +195,22 @@
                          resultsList.appendChild(divider);
                     }
                    
-                    // 지도에 마커 추가
-                    const marker = new markerLibrary.AdvancedMarkerElement({
+                    const marker = new google.maps.Marker({
                         map,
                         position: placeLocation,
-                        title: place.displayName.text,
+                        title: place.name,
                     });
                     markers.push(marker);
 
                     const infowindow = new google.maps.InfoWindow({
                         content: `
                             <div class="font-sans p-1">
-                                <h4 class="font-bold text-md mb-1">${place.displayName.text}</h4>
-                                <p class="text-sm text-gray-600">${place.formattedAddress}</p>
+                                <h4 class="font-bold text-md mb-1">${place.name}</h4>
+                                <p class="text-sm text-gray-600">${place.vicinity || place.formatted_address}</p>
                             </div>
                         `
                     });
 
-                    // 마커 클릭 시 정보창 열기
                     marker.addListener("click", () => {
                         infowindow.open({
                             anchor: marker,
@@ -252,12 +227,8 @@
             }
         }
 
-        /**
-         * 카테고리 버튼 클릭 이벤트 핸들러.
-         * @param {Event} event - 클릭 이벤트 객체.
-         */
-        async function handleCategoryClick(event) {
-            if (!userLocation) {
+        function handleCategoryClick(event) {
+            if (!placesService || !userLocation) {
                 setMessage("위치 정보를 가져오는 중입니다. 잠시만 기다려주세요.");
                 return;
             }
@@ -266,26 +237,15 @@
             currentCategory = category;
             setMessage(`'${category}' 맛집을 찾고 있습니다...`);
             
-            try {
-                const request = {
-                    locationRestriction: {
-                        circle: {
-                            center: userLocation,
-                            radius: 1000.0,
-                        },
-                    },
-                    textQuery: `${category} 맛집`,
-                };
-
-                const { places } = await placesLibrary.Place.search(request);
-                processResults(places);
-            } catch (error) {
-                setMessage("검색 결과를 불러오는 데 실패했습니다. 콘솔을 확인해주세요.");
-                console.error("Places API Error:", error);
-            }
+            const request = {
+                location: userLocation,
+                radius: 1000,
+                type: ['restaurant'],
+                keyword: `${category} 맛집`,
+            };
+            placesService.nearbySearch(request, processResults);
         }
 
-        // 모든 카테고리 버튼에 이벤트 리스너 추가
         document.addEventListener('DOMContentLoaded', () => {
             const buttons = document.querySelectorAll('.category-btn');
             buttons.forEach(button => {
