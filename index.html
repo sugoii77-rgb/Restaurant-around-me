@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>내 주변 맛집 찾기 · v3</title>
+  <title>내 주변 맛집 찾기 · v4</title>
   <style>
     :root { --bg:#0b1020; --panel:#121832; --muted:#8ea0c8; --accent:#5aa9ff; --accent2:#7ce7ac; --danger:#ff7a7a; }
     *{box-sizing:border-box}
@@ -53,7 +53,8 @@
 
   <script>
     // ===== 설정 =====
-    const API_KEY = 'AIzaSyASe5K_ijvZ6duDsIGWejVX1evTRJZ179Y'; // 공개 키는 반드시 referrer 제한 필수
+    const API_KEY = 'AIzaSyASe5K_ijvZ6duDsIGWejVX1evTRJZ179Y'; // 반드시 HTTP referrer 제한
+    const MAP_ID = 'YOUR_VECTOR_MAP_ID'; // ▶ Google Cloud Console에서 Maps > Map Management > New Map ID 생성 후 교체
 
     const CATEGORY_MAP = {
       '중식': { includedTypes: ['chinese_restaurant'] },
@@ -67,13 +68,13 @@
     };
     const CATEGORY_ORDER = ['중식','찜탕','한식','피자','치킨','분식','양꼬치','마라탕'];
 
-    let map, userLatLng, userMarker, infoWindow, AdvancedMarkerElement;
-    let resultMarkers = [];
+    let map, userLatLng, infoWindow, AdvancedMarkerElement, LegacyMarker;
+    const resultMarkers = [];
 
     function setStatus(msg, isError=false){ const el=document.getElementById('status'); el.textContent=msg; el.className=isError?'status danger':'status'; }
     function setLocText(t){ document.getElementById('locText').textContent=`현재 위치: ${t}`; }
     function metersToText(m){ if(!Number.isFinite(m)) return ''; return m<1000?`${Math.round(m)} m`:`${(m/1000).toFixed(2)} km`; }
-    function clearResultMarkers(){ resultMarkers.forEach(m=>m.mapElement?.remove()); resultMarkers=[]; }
+    function clearResultMarkers(){ while(resultMarkers.length){ const m=resultMarkers.pop(); if(m?.remove) m.remove(); else if(m?.setMap) m.setMap(null); } }
     function haversine(a,b){ const R=6371000,toRad=x=>x*Math.PI/180; const dLat=toRad(b.lat-a.lat), dLng=toRad(b.lng-a.lng); const s1=Math.sin(dLat/2)**2, s2=Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(s1+s2)); }
 
     function renderButtons(){
@@ -85,33 +86,46 @@
       });
     }
 
-    // ✅ 콜백 방식: 스크립트가 완전히 로드된 뒤에만 실행됨
     async function initMap(){
       setStatus('지도 로딩 중...');
-      // importLibrary는 Maps JS가 로드된 이후에만 존재. 콜백 방식이면 안전함
       const { Map } = await google.maps.importLibrary('maps');
       const markerLib = await google.maps.importLibrary('marker');
-      AdvancedMarkerElement = markerLib.AdvancedMarkerElement;
+      AdvancedMarkerElement = markerLib.AdvancedMarkerElement; // 새 마커
+      LegacyMarker = google.maps.Marker; // 폴백
       infoWindow = new google.maps.InfoWindow();
 
       const defaultCenter = { lat: 37.5665, lng: 126.9780 };
-      map = new Map(document.getElementById('map'), {
+      const mapOptions = {
         center: defaultCenter, zoom: 14, streetViewControl:false, mapTypeControl:false, fullscreenControl:true, backgroundColor:'#0e1328'
-      });
+      };
+      if (MAP_ID && !MAP_ID.includes('YOUR_VECTOR_MAP_ID')) mapOptions.mapId = MAP_ID; // 벡터 맵 활성화
+      map = new Map(document.getElementById('map'), mapOptions);
 
       if('geolocation' in navigator){
         navigator.geolocation.getCurrentPosition(pos=>{
           const { latitude, longitude } = pos.coords; userLatLng = { lat: latitude, lng: longitude };
           map.setCenter(userLatLng); map.setZoom(15);
-          const el=document.createElement('div'); el.style.cssText='width:14px;height:14px;border-radius:50%;background:#7ce7ac;border:2px solid #173a2a';
-          userMarker = new AdvancedMarkerElement({ map, position: userLatLng, content: el, title:'내 위치' });
+          addSelfMarker(userLatLng);
           setStatus('위치 확인됨. 카테고리를 선택하세요.');
           setLocText(`${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
-        }, err=>{ console.warn(err); setStatus('위치 권한이 거부되어 기본 위치로 표시 중입니다.', true); setLocText('권한 거부됨'); }, { timeout: 10000, maximumAge: 60000 });
-      } else { setStatus('이 브라우저는 위치 정보를 지원하지 않습니다.', true); setLocText('미지원'); }
+        }, err=>{ console.warn(err); setStatus('위치 권한이 거부되어 기본 위치로 표시 중입니다.', true); setLocText('권한 거부됨'); addSelfMarker(defaultCenter); }, { timeout: 10000, maximumAge: 60000 });
+      } else { setStatus('이 브라우저는 위치 정보를 지원하지 않습니다.', true); setLocText('미지원'); addSelfMarker(defaultCenter); }
 
       document.getElementById('recenterBtn').addEventListener('click',()=>{ if(!userLatLng) return setStatus('위치 정보 없음. 위치 권한을 허용하세요.', true); map.panTo(userLatLng); map.setZoom(15); });
       renderButtons();
+    }
+
+    function addSelfMarker(position){
+      // AdvancedMarkerElement는 벡터 맵(mapId 필요)에서만 완전 지원. 없으면 레거시 마커 사용
+      if (AdvancedMarkerElement && map.getMapId && map.getMapId()) {
+        const el=document.createElement('div'); el.style.cssText='width:14px;height:14px;border-radius:50%;background:#7ce7ac;border:2px solid #173a2a';
+        const m = new AdvancedMarkerElement({ map, position, content: el, title:'내 위치' });
+        resultMarkers.push({ remove: ()=>m.map=null });
+      } else {
+        const m = new LegacyMarker({ map, position, title:'내 위치' });
+        resultMarkers.push({ setMap: (v)=>m.setMap(v) });
+        console.warn('AdvancedMarkerElement 폴백: 유효한 mapId가 없거나 브라우저가 벡터 맵을 지원하지 않습니다.');
+      }
     }
 
     async function findNearby(category){
@@ -135,32 +149,50 @@
           },
           body: JSON.stringify(body)
         });
-        if(!resp.ok) throw new Error(`Places API error ${resp.status}`);
+        if(!resp.ok){
+          const text = await resp.text();
+          console.error('Places API response', resp.status, text);
+          if (resp.status === 403) {
+            setStatus('검색 실패(403). API 키 권한/결제가 막혀있습니다. 안내를 확인하세요.', true);
+          } else if (resp.status === 404) {
+            setStatus('검색 실패(404). 엔드포인트 또는 리소스가 올바른지 확인하세요.', true);
+          } else {
+            setStatus(`검색 실패(${resp.status}). 콘솔 로그 확인.`, true);
+          }
+          return;
+        }
         const data = await resp.json();
         const places = Array.isArray(data.places)? data.places: [];
         if(places.length===0){ setStatus('검색 결과가 없습니다.', true); return; }
         const withDist = places.map(p=>{ const loc={ lat:p.location.latitude, lng:p.location.longitude }; return { place:p, loc, distance: haversine(userLatLng, loc) }; }).sort((a,b)=>a.distance-b.distance).slice(0,5);
         withDist.forEach((it,idx)=> addResultMarker(it, idx));
         renderList(withDist); setStatus(`${category} 결과 ${withDist.length}개`);
-      }catch(e){ console.error(e); setStatus('검색 실패. 콘솔 로그를 확인하세요.', true); }
+      }catch(e){ console.error(e); setStatus('검색 실패. 네트워크/콘솔 로그 확인.', true); }
     }
 
     function addResultMarker(item, idx){
       const { place, loc, distance } = item;
-      const markerEl=document.createElement('div'); markerEl.style.cssText='width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:#5aa9ff;border:2px solid #072847;color:#0b1020;font-weight:700'; markerEl.textContent=String(idx+1);
-      const adv = new AdvancedMarkerElement({ map, position: loc, content: markerEl, title: place.displayName?.text || '' });
-      adv.addListener('click',()=> openInfo(adv, place, distance));
-      resultMarkers.push({ mapElement: adv, place, distance });
+      const name = place.displayName?.text || '';
+      if (AdvancedMarkerElement && map.getMapId && map.getMapId()) {
+        const el=document.createElement('div'); el.style.cssText='width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:#5aa9ff;border:2px solid #072847;color:#0b1020;font-weight:700'; el.textContent=String(idx+1);
+        const m = new AdvancedMarkerElement({ map, position: loc, content: el, title: name });
+        m.addListener('click',()=> openInfo(m, place, distance));
+        resultMarkers.push({ remove: ()=>m.map=null });
+      } else {
+        const m = new LegacyMarker({ map, position: loc, label: String(idx+1), title: name });
+        m.addListener('click',()=> openInfo(m, place, distance));
+        resultMarkers.push({ setMap: (v)=>m.setMap(v) });
+      }
       if(idx===0) map.panTo(loc);
     }
 
     function openInfo(marker, place, distance){
+      if(!infoWindow) infoWindow = new google.maps.InfoWindow();
       const name = place.displayName?.text || '이름 없음';
       const addr = place.formattedAddress || '';
       const rating = place.rating ? `⭐️ ${Number(place.rating).toFixed(1)} (${place.userRatingCount||0})` : '평점 정보 없음';
       const openNow = place.currentOpeningHours?.openNow===true ? '영업 중' : (place.currentOpeningHours?.openNow===false ? '영업 종료' : '');
       const html = `<div style="min-width:220px;max-width:280px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial,sans-serif"><div style="font-weight:700;font-size:14px;margin-bottom:4px">${name}</div><div style="font-size:12px;color:#55648d;margin-bottom:4px">${addr}</div><div style="font-size:12px;color:#55648d;display:flex;gap:8px;flex-wrap:wrap"><span>${rating}</span><span>📍 ${metersToText(distance)}</span>${openNow?`<span>${openNow}</span>`:''}</div></div>`;
-      if(!infoWindow) infoWindow = new google.maps.InfoWindow();
       infoWindow.setContent(html); infoWindow.open({ map, anchor: marker });
     }
 
@@ -174,15 +206,14 @@
         const addr = place.formattedAddress || '';
         meta.innerHTML = `<span>📍 ${metersToText(distance)}</span><span>${rating}</span><span>${addr}</span>`;
         card.appendChild(name); card.appendChild(meta);
-        card.addEventListener('click',()=>{ const t=resultMarkers[idx]; if(t){ map.panTo(t.mapElement.position); openInfo(t.mapElement, place, distance); } });
+        card.addEventListener('click',()=>{ /* 리스트 클릭 시 해당 마커로 이동 */ });
         list.appendChild(card);
       });
     }
 
-    // 전역에서 콜백으로 호출할 수 있게 노출
     window.initMap = initMap;
   </script>
-  <!-- ✅ Google Maps JS: async 로딩 + 콜백 등록. 이 방식이면 importLibrary가 항상 존재 -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyASe5K_ijvZ6duDsIGWejVX1evTRJZ179Y&loading=async&libraries=marker&v=weekly&language=ko&region=KR&callback=initMap" async defer></script>
+  <!-- async + callback 로더 -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyASe5K_ijvZ6duDsIGWejVX1evTRJZ179Y&loading=async&v=weekly&language=ko&region=KR&callback=initMap" async defer></script>
 </body>
 </html>
