@@ -265,17 +265,17 @@
             // 새로운 Places API를 이용한 주변 검색 요청
             try {
                 const request = {
-                    locationRestriction: {
-                        center: userLocation,
-                        radius: 1000.0,
+                    locationBias: {
+                        circle: {
+                            center: userLocation,
+                            radius: 1000.0,
+                        },
                     },
-                    includedTypes: ['restaurant'],
-                    includedPrimaryTypes: ['restaurant'],
-                    rankPreference: SearchNearbyRankPreference.DISTANCE,
-                    query: category,
+                    includedType: 'restaurant',
+                    textQuery: `${category} 맛집`,
                 };
 
-                const { places } = await Place.searchNearby(request);
+                const { places } = await Place.search(request);
                 processResults(places);
 
             } catch (error) {
