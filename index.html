@@ -140,6 +140,7 @@
                 center: center,
                 zoom: 15,
                 disableDefaultUI: true,
+                mapId: 'DEMO_MAP_ID', // Advanced Markers를 사용하려면 Map ID가 필요합니다.
                 zoomControl: true,
             });
 
@@ -271,7 +272,7 @@
                     includedTypes: ['restaurant'],
                     includedPrimaryTypes: ['restaurant'],
                     rankPreference: SearchNearbyRankPreference.DISTANCE,
-                    keyword: category,
+                    query: category,
                 };
 
                 const { places } = await Place.searchNearby(request);
