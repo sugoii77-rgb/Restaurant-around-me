@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>내 주변 맛집 찾기 · v4</title>
+  <title>내 주변 맛집 찾기 · v5</title>
   <style>
     :root { --bg:#0b1020; --panel:#121832; --muted:#8ea0c8; --accent:#5aa9ff; --accent2:#7ce7ac; --danger:#ff7a7a; }
     *{box-sizing:border-box}
@@ -44,7 +44,7 @@
         <div class="loc" id="locText">현재 위치: 파악 중</div>
         <button id="recenterBtn" class="btn">현재 위치 재설정</button>
       </div>
-      <div class="small">버튼을 누르면 현재 위치 기준으로 가까운 5곳을 거리순으로 보여줍니다. (Places API New 사용)</div>
+      <div class="small">버튼을 누르면 현재 위치 기준으로 가까운 5곳을 거리순으로 보여줍니다. (Places API New)</div>
       <div class="list" id="list"></div>
       <div class="small" style="padding-top:6px">Tip: 위치 권한은 <span class="kbd">https</span> 또는 <span class="kbd">localhost</span> 에서만 정상 동작.</div>
     </aside>
@@ -53,35 +53,37 @@
 
   <script>
     // ===== 설정 =====
-    const API_KEY = 'AIzaSyASe5K_ijvZ6duDsIGWejVX1evTRJZ179Y'; // 반드시 HTTP referrer 제한
-    const MAP_ID = 'YOUR_VECTOR_MAP_ID'; // ▶ Google Cloud Console에서 Maps > Map Management > New Map ID 생성 후 교체
+    const API_KEY = 'AIzaSyASe5K_ijvZ6duDsIGWejVX1evTRJZ179Y'; // referrer 제한 필수
+    const MAP_ID = 'YOUR_VECTOR_MAP_ID'; // ▶ Console > Maps > Map Management > Create Map ID 후 교체
+    const ADVANCED_OK = MAP_ID && !MAP_ID.includes('YOUR_VECTOR_MAP_ID');
 
-    const CATEGORY_MAP = {
-      '중식': { includedTypes: ['chinese_restaurant'] },
-      '찜탕': { includedTypes: ['restaurant'], keyword: '찜 탕 감자탕 해물찜 갈비찜 곰탕 soup stew' },
-      '한식': { includedTypes: ['korean_restaurant'] },
-      '피자': { includedTypes: ['pizza_restaurant'] },
-      '치킨': { includedTypes: ['chicken_restaurant'] },
-      '분식': { includedTypes: ['restaurant'], keyword: '분식 떡볶이 순대 튀김 tteokbokki snack bar' },
-      '양꼬치': { includedTypes: ['restaurant'], keyword: '양꼬치 양갈비 lamb skewers yangkkochi chuan' },
-      '마라탕': { includedTypes: ['restaurant'], keyword: '마라탕 마라샹궈 malatang hot pot' }
+    // 카테고리 전략: 타입 기반(nearby) vs 키워드 기반(text)
+    const STRATEGY = {
+      '중식':  { mode: 'nearby', includedTypes: ['chinese_restaurant'], fallbackQuery: '중식 중국집 Chinese restaurant' },
+      '한식':  { mode: 'nearby', includedTypes: ['korean_restaurant'],  fallbackQuery: '한식 Korean restaurant' },
+      '피자':  { mode: 'nearby', includedTypes: ['pizza_restaurant'],   fallbackQuery: '피자 pizza' },
+      '치킨':  { mode: 'text',   textQuery: '치킨 fried chicken' },
+      '분식':  { mode: 'text',   textQuery: '분식 떡볶이 순대 튀김 tteokbokki snack bar' },
+      '찜탕':  { mode: 'text',   textQuery: '찜 탕 감자탕 해물찜 갈비찜 곰탕 soup stew' },
+      '양꼬치': { mode: 'text',   textQuery: '양꼬치 양갈비 lamb skewers yangkkochi chuan' },
+      '마라탕': { mode: 'text',   textQuery: '마라탕 마라샹궈 malatang hot pot' }
     };
     const CATEGORY_ORDER = ['중식','찜탕','한식','피자','치킨','분식','양꼬치','마라탕'];
 
     let map, userLatLng, infoWindow, AdvancedMarkerElement, LegacyMarker;
-    const resultMarkers = [];
+    const resultRefs = []; // { remove() }
 
     function setStatus(msg, isError=false){ const el=document.getElementById('status'); el.textContent=msg; el.className=isError?'status danger':'status'; }
     function setLocText(t){ document.getElementById('locText').textContent=`현재 위치: ${t}`; }
     function metersToText(m){ if(!Number.isFinite(m)) return ''; return m<1000?`${Math.round(m)} m`:`${(m/1000).toFixed(2)} km`; }
-    function clearResultMarkers(){ while(resultMarkers.length){ const m=resultMarkers.pop(); if(m?.remove) m.remove(); else if(m?.setMap) m.setMap(null); } }
+    function clearResultMarkers(){ while(resultRefs.length){ const r=resultRefs.pop(); try{ r.remove(); }catch{} } }
     function haversine(a,b){ const R=6371000,toRad=x=>x*Math.PI/180; const dLat=toRad(b.lat-a.lat), dLng=toRad(b.lng-a.lng); const s1=Math.sin(dLat/2)**2, s2=Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(s1+s2)); }
 
     function renderButtons(){
       const box=document.getElementById('buttons');
       CATEGORY_ORDER.forEach(cat=>{
         const b=document.createElement('button'); b.className='btn'; b.textContent=cat; b.dataset.cat=cat;
-        b.addEventListener('click',()=>{ if(!userLatLng) return setStatus('위치 확인 후 사용하세요.', true); document.getElementById('activeLabel').textContent=`선택: ${cat}`; findNearby(cat); });
+        b.addEventListener('click',()=>{ if(!userLatLng) return setStatus('위치 확인 후 사용하세요.', true); document.getElementById('activeLabel').textContent=`선택: ${cat}`; findPlaces(cat); });
         box.appendChild(b);
       });
     }
@@ -91,14 +93,12 @@
       const { Map } = await google.maps.importLibrary('maps');
       const markerLib = await google.maps.importLibrary('marker');
       AdvancedMarkerElement = markerLib.AdvancedMarkerElement; // 새 마커
-      LegacyMarker = google.maps.Marker; // 폴백
+      LegacyMarker = google.maps.Marker; // 폴백 마커
       infoWindow = new google.maps.InfoWindow();
 
       const defaultCenter = { lat: 37.5665, lng: 126.9780 };
-      const mapOptions = {
-        center: defaultCenter, zoom: 14, streetViewControl:false, mapTypeControl:false, fullscreenControl:true, backgroundColor:'#0e1328'
-      };
-      if (MAP_ID && !MAP_ID.includes('YOUR_VECTOR_MAP_ID')) mapOptions.mapId = MAP_ID; // 벡터 맵 활성화
+      const mapOptions = { center: defaultCenter, zoom: 14, streetViewControl:false, mapTypeControl:false, fullscreenControl:true, backgroundColor:'#0e1328' };
+      if (ADVANCED_OK) mapOptions.mapId = MAP_ID;
       map = new Map(document.getElementById('map'), mapOptions);
 
       if('geolocation' in navigator){
@@ -116,72 +116,97 @@
     }
 
     function addSelfMarker(position){
-      // AdvancedMarkerElement는 벡터 맵(mapId 필요)에서만 완전 지원. 없으면 레거시 마커 사용
-      if (AdvancedMarkerElement && map.getMapId && map.getMapId()) {
+      if (ADVANCED_OK && AdvancedMarkerElement){
         const el=document.createElement('div'); el.style.cssText='width:14px;height:14px;border-radius:50%;background:#7ce7ac;border:2px solid #173a2a';
         const m = new AdvancedMarkerElement({ map, position, content: el, title:'내 위치' });
-        resultMarkers.push({ remove: ()=>m.map=null });
+        resultRefs.push({ remove: ()=> m.map = null });
       } else {
         const m = new LegacyMarker({ map, position, title:'내 위치' });
-        resultMarkers.push({ setMap: (v)=>m.setMap(v) });
-        console.warn('AdvancedMarkerElement 폴백: 유효한 mapId가 없거나 브라우저가 벡터 맵을 지원하지 않습니다.');
+        resultRefs.push({ remove: ()=> m.setMap(null) });
+        // 고급 마커 경고 회피하려면 MAP_ID 발급 후 위 ADVANCED_OK를 true로
+        console.warn('AdvancedMarkerElement 폴백: mapId가 없거나 벡터 맵 미사용');
       }
     }
 
-    async function findNearby(category){
+    async function findPlaces(category){
       clearResultMarkers(); document.getElementById('list').innerHTML=''; setStatus(`${category} 검색 중...`);
-      const cfg = CATEGORY_MAP[category] || { includedTypes:['restaurant'] };
+      const cfg = STRATEGY[category] || { mode:'nearby', includedTypes:['restaurant'], fallbackQuery:'restaurant' };
+
+      try {
+        let places = [];
+        if (cfg.mode === 'nearby') {
+          places = await nearbySearch(cfg.includedTypes);
+          if (places.length === 0 && cfg.fallbackQuery) {
+            console.warn('nearby 결과 없음, textSearch로 폴백');
+            places = await textSearch(cfg.fallbackQuery);
+          }
+        } else {
+          places = await textSearch(cfg.textQuery);
+        }
+
+        if (places.length === 0) { setStatus('검색 결과가 없습니다.', true); return; }
+
+        const withDist = places.map(p=>{ const loc={ lat:p.location.latitude, lng:p.location.longitude }; return { place:p, loc, distance: haversine(userLatLng, loc) }; }).sort((a,b)=>a.distance-b.distance).slice(0,5);
+        withDist.forEach((it,idx)=> addResultMarker(it, idx));
+        renderList(withDist); setStatus(`${category} 결과 ${withDist.length}개`);
+      } catch (e) {
+        console.error(e); setStatus('검색 실패. 콘솔 로그를 확인하세요.', true);
+      }
+    }
+
+    async function nearbySearch(includedTypes){
       const body = {
-        includedTypes: cfg.includedTypes,
-        maxResultCount: 20,
+        includedTypes,
         rankPreference: 'DISTANCE',
         languageCode: 'ko',
         locationRestriction: { circle: { center: { latitude: userLatLng.lat, longitude: userLatLng.lng }, radius: 5000 } }
       };
-      if(cfg.keyword) body.textQuery = cfg.keyword;
-      try{
-        const resp = await fetch('https://places.googleapis.com/v1/places:searchNearby',{
-          method:'POST',
-          headers:{
-            'Content-Type':'application/json',
-            'X-Goog-Api-Key': API_KEY,
-            'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours.openNow'
-          },
-          body: JSON.stringify(body)
-        });
-        if(!resp.ok){
-          const text = await resp.text();
-          console.error('Places API response', resp.status, text);
-          if (resp.status === 403) {
-            setStatus('검색 실패(403). API 키 권한/결제가 막혀있습니다. 안내를 확인하세요.', true);
-          } else if (resp.status === 404) {
-            setStatus('검색 실패(404). 엔드포인트 또는 리소스가 올바른지 확인하세요.', true);
-          } else {
-            setStatus(`검색 실패(${resp.status}). 콘솔 로그 확인.`, true);
-          }
-          return;
-        }
-        const data = await resp.json();
-        const places = Array.isArray(data.places)? data.places: [];
-        if(places.length===0){ setStatus('검색 결과가 없습니다.', true); return; }
-        const withDist = places.map(p=>{ const loc={ lat:p.location.latitude, lng:p.location.longitude }; return { place:p, loc, distance: haversine(userLatLng, loc) }; }).sort((a,b)=>a.distance-b.distance).slice(0,5);
-        withDist.forEach((it,idx)=> addResultMarker(it, idx));
-        renderList(withDist); setStatus(`${category} 결과 ${withDist.length}개`);
-      }catch(e){ console.error(e); setStatus('검색 실패. 네트워크/콘솔 로그 확인.', true); }
+      const resp = await fetch('https://places.googleapis.com/v1/places:searchNearby',{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'X-Goog-Api-Key': API_KEY,
+          'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours.openNow'
+        },
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) { const t=await resp.text(); console.error('Nearby error', resp.status, t); return []; }
+      const data = await resp.json();
+      return Array.isArray(data.places) ? data.places : [];
+    }
+
+    async function textSearch(query){
+      const body = {
+        textQuery: query,
+        languageCode: 'ko',
+        locationBias: { circle: { center: { latitude: userLatLng.lat, longitude: userLatLng.lng }, radius: 5000 } }
+      };
+      const resp = await fetch('https://places.googleapis.com/v1/places:searchText',{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'X-Goog-Api-Key': API_KEY,
+          'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours.openNow'
+        },
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) { const t=await resp.text(); console.error('TextSearch error', resp.status, t); return []; }
+      const data = await resp.json();
+      return Array.isArray(data.places) ? data.places : [];
     }
 
     function addResultMarker(item, idx){
       const { place, loc, distance } = item;
       const name = place.displayName?.text || '';
-      if (AdvancedMarkerElement && map.getMapId && map.getMapId()) {
+      if (ADVANCED_OK && AdvancedMarkerElement){
         const el=document.createElement('div'); el.style.cssText='width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:#5aa9ff;border:2px solid #072847;color:#0b1020;font-weight:700'; el.textContent=String(idx+1);
         const m = new AdvancedMarkerElement({ map, position: loc, content: el, title: name });
         m.addListener('click',()=> openInfo(m, place, distance));
-        resultMarkers.push({ remove: ()=>m.map=null });
+        resultRefs.push({ remove: ()=> m.map = null });
       } else {
         const m = new LegacyMarker({ map, position: loc, label: String(idx+1), title: name });
         m.addListener('click',()=> openInfo(m, place, distance));
-        resultMarkers.push({ setMap: (v)=>m.setMap(v) });
+        resultRefs.push({ remove: ()=> m.setMap(null) });
       }
       if(idx===0) map.panTo(loc);
     }
@@ -198,6 +223,7 @@
 
     function renderList(items){
       const list=document.getElementById('list');
+      list.innerHTML='';
       items.forEach((item, idx)=>{
         const { place, distance } = item; const card=document.createElement('div'); card.className='card';
         const name=document.createElement('div'); name.className='name'; name.innerHTML = `<span class="rank">${idx+1}</span> ${place.displayName?.text || ''}`;
@@ -206,7 +232,7 @@
         const addr = place.formattedAddress || '';
         meta.innerHTML = `<span>📍 ${metersToText(distance)}</span><span>${rating}</span><span>${addr}</span>`;
         card.appendChild(name); card.appendChild(meta);
-        card.addEventListener('click',()=>{ /* 리스트 클릭 시 해당 마커로 이동 */ });
+        card.addEventListener('click',()=>{ /* 선택 시 마커로 이동하려면 여기에서 참조를 보관해서 이동 가능 */ });
         list.appendChild(card);
       });
     }
