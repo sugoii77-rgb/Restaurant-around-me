@@ -166,7 +166,7 @@
          * 지도에 있는 모든 마커를 제거하는 함수.
          */
         function clearMarkers() {
-            markers.forEach(marker => marker.setMap(null));
+            markers.forEach(marker => marker.map = null);
             markers = [];
         }
 
@@ -268,7 +268,7 @@
                         center: userLocation,
                         radius: 1000.0,
                     },
-                    includedType: 'restaurant',
+                    includedTypes: ['restaurant'],
                     includedPrimaryTypes: ['restaurant'],
                     rankPreference: SearchNearbyRankPreference.DISTANCE,
                     keyword: category,
