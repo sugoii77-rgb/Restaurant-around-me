@@ -265,13 +265,12 @@
             // 새로운 Places API를 이용한 주변 검색 요청
             try {
                 const request = {
-                    locationBias: {
+                    locationRestriction: {
                         circle: {
                             center: userLocation,
                             radius: 1000.0,
                         },
                     },
-                    includedType: 'restaurant',
                     textQuery: `${category} 맛집`,
                 };
 
